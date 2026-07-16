@@ -200,6 +200,10 @@ fetch_source() {
 
 # ---------- 编译后端 ----------
 build_backend() {
+    if [[ -f "$INSTALL_DIR/go-backend/paneld" ]]; then
+        ok "检测到后端已编译，跳过"
+        return
+    fi
     log "开始编译后端 paneld ..."
     cd "$INSTALL_DIR/go-backend"
     export GOPROXY="$GOMOD_PROXY"
@@ -218,6 +222,10 @@ build_backend() {
 
 # ---------- 构建前端 ----------
 build_frontend() {
+    if [[ -d "$INSTALL_DIR/vite-frontend/dist" ]]; then
+        ok "检测到前端已构建，跳过"
+        return
+    fi
     log "开始构建前端 ..."
     cd "$INSTALL_DIR/vite-frontend"
     
@@ -245,7 +253,8 @@ gen_env() {
     fi
     log "生成环境配置文件..."
     local jwt
-    jwt=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)
+    # 修复 pipefail 导致的 SIGPIPE 退出问题
+    jwt=$(head -c 48 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9')
     cat > "$envfile" <<EOF
 DB_TYPE=sqlite
 DB_PATH=$INSTALL_DIR/data/gost.db
@@ -430,6 +439,9 @@ do_update() {
     log "===== 开始更新流程 ====="
     detect_os
     fetch_source
+    # 强制重新编译
+    rm -f "$INSTALL_DIR/go-backend/paneld"
+    rm -rf "$INSTALL_DIR/vite-frontend/dist"
     build_backend
     build_frontend
     systemctl restart "$SERVICE_NAME"
