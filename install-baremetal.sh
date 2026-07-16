@@ -81,7 +81,6 @@ check_memory_and_swap() {
             chmod 600 /swapfile
             mkswap /swapfile
             swapon /swapfile
-            # 写入 fstab 永久生效
             if ! grep -q '/swapfile' /etc/fstab; then
                 echo '/swapfile none swap sw 0 0' >> /etc/fstab
             fi
@@ -208,7 +207,6 @@ build_backend() {
     log "下载 Go 依赖包..."
     go mod download
     log "执行编译 (这可能需要几分钟，请耐心等待)..."
-    # 限制并行编译数量，降低内存峰值
     go build -p 2 -trimpath -ldflags="-s -w" -o paneld ./cmd/paneld
     if [[ -f paneld ]]; then
         ok "后端编译成功，大小：$(ls -lh paneld | awk '{print $5}')"
@@ -222,9 +220,13 @@ build_backend() {
 build_frontend() {
     log "开始构建前端 ..."
     cd "$INSTALL_DIR/vite-frontend"
+    
+    # 提升 Node.js 内存限制到 2GB，防止 Vite 打包时 OOM
+    export NODE_OPTIONS="--max-old-space-size=2048"
+    
     log "安装前端依赖..."
     pnpm install --frozen-lockfile 2>/dev/null || pnpm install
-    log "执行前端打包..."
+    log "执行前端打包 (这可能需要几分钟，请耐心等待)..."
     pnpm build
     if [[ -d dist ]]; then
         ok "前端构建成功，大小：$(du -sh dist | awk '{print $1}')"
