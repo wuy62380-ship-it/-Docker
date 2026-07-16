@@ -3,7 +3,9 @@
 # flvx 裸机一键部署脚本（不依赖 Docker）
 # 适用：Ubuntu 20.04+ / Debian 11+ / CentOS 8+ / Fedora 38+
 # 架构：amd64 / arm64
-# 用法： sudo ./install-baremetal.sh
+# 用法： 
+#   自动安装： curl -fsSL <url> | sudo bash
+#   交互菜单： sudo ./install-baremetal.sh
 # =============================================================
 set -euo pipefail
 
@@ -399,21 +401,28 @@ do_status() {
     nginx -t 2>&1 | head -n 5
 }
 
-# ---------- 入口 ----------
+# ---------- 自动化入口逻辑 ----------
 if [[ $# -ge 1 ]]; then
+    # 如果传了参数，按参数执行
     case "$1" in
         install|update|uninstall|status) "do_$1" ;;
         *) show_menu; exit 1 ;;
     esac
 else
-    show_menu
-    read -rp "请选择 [1-5]：" c
-    case "$c" in
-        1) do_install ;;
-        2) do_update ;;
-        3) do_uninstall ;;
-        4) do_status ;;
-        5) exit 0 ;;
-        *) err "无效选项"; exit 1 ;;
-    esac
+    # 未传参数时：如果是交互式终端，显示菜单；如果是管道(curl|bash)，直接自动安装
+    if [[ -t 0 ]]; then
+        show_menu
+        read -rp "请选择 [1-5]：" c
+        case "$c" in
+            1) do_install ;;
+            2) do_update ;;
+            3) do_uninstall ;;
+            4) do_status ;;
+            5) exit 0 ;;
+            *) err "无效选项"; exit 1 ;;
+        esac
+    else
+        log "检测到自动化管道环境，自动开始安装..."
+        do_install
+    fi
 fi
