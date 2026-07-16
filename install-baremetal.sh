@@ -4,7 +4,8 @@
 # 适用：Ubuntu 20.04+ / Debian 11+ / CentOS 8+ / Fedora 38+
 # 架构：amd64 / arm64
 # 用法： 
-#   自动安装： curl -fsSL <url> | sudo bash
+#   自动安装(默认端口)： curl -fsSL <url> | sudo bash
+#   自动安装(指定端口)： curl -fsSL <url> | sudo FRONTEND_PORT=8080 BACKEND_PORT=6365 bash
 #   交互菜单： sudo ./install-baremetal.sh
 # =============================================================
 set -euo pipefail
@@ -12,12 +13,12 @@ set -euo pipefail
 # ---------- 禁用交互式对话框 ----------
 export DEBIAN_FRONTEND=noninteractive
 
-# ---------- 可配置项 ----------
+# ---------- 可配置项 (支持环境变量传入) ----------
 INSTALL_DIR="/opt/flvx"
 REPO_URL="https://github.com/Sagit-chu/flvx.git"
 REPO_BRANCH="main"
-BACKEND_PORT=6365
-FRONTEND_PORT=80
+BACKEND_PORT="${BACKEND_PORT:-6365}"     # 后端 API 端口
+FRONTEND_PORT="${FRONTEND_PORT:-80}"     # 前端面板端口
 GOMOD_PROXY="https://goproxy.cn,direct"
 NPM_REGISTRY="https://registry.npmmirror.com"
 GH_PROXY=""
@@ -63,6 +64,7 @@ detect_os() {
         *) err "不支持的架构：$(uname -m)"; exit 1 ;;
     esac
     log "系统：$OS_ID $OS_VER  架构：$ARCH"
+    log "使用端口 -> 前端面板: $FRONTEND_PORT | 后端API: $BACKEND_PORT"
 }
 
 # ---------- 检查内存并创建 Swap ----------
@@ -248,12 +250,11 @@ build_frontend() {
 gen_env() {
     local envfile="$INSTALL_DIR/.env"
     if [[ -f "$envfile" ]]; then
-        warn ".env 已存在，保留不动"
+        warn ".env 已存在，保留不动 (如需重新生成请先删除)"
         return
     fi
     log "生成环境配置文件..."
     local jwt
-    # 修复 pipefail 导致的 SIGPIPE 退出问题
     jwt=$(head -c 48 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9')
     cat > "$envfile" <<EOF
 DB_TYPE=sqlite
@@ -365,18 +366,25 @@ server {
 EOF
     nginx -t || { err "Nginx 配置语法错误"; exit 1; }
     systemctl reload nginx
-    ok "Nginx 配置生效"
+    ok "Nginx 配置生效，监听端口 $FRONTEND_PORT"
 }
 
-# ---------- 防火墙提示 ----------
-firewall_hint() {
+# ---------- 自动开放防火墙端口 ----------
+configure_firewall() {
+    local ports=("$FRONTEND_PORT" "$BACKEND_PORT")
     if command -v ufw >/dev/null; then
-        ufw allow "$FRONTEND_PORT/tcp" >/dev/null 2>&1 && warn "ufw 已放行 $FRONTEND_PORT"
+        for port in "${ports[@]}"; do
+            ufw allow "$port/tcp" >/dev/null 2>&1 && log "ufw 已放行端口: $port"
+        done
     elif command -v firewall-cmd >/dev/null; then
-        firewall-cmd --permanent --add-port="$FRONTEND_PORT/tcp" >/dev/null 2>&1
-        firewall-cmd --reload >/dev/null 2>&1 && warn "firewalld 已放行 $FRONTEND_PORT"
+        for port in "${ports[@]}"; do
+            firewall-cmd --permanent --add-port="$port/tcp" >/dev/null 2>&1
+        done
+        firewall-cmd --reload >/dev/null 2>&1 && log "firewalld 已放行端口: ${ports[*]}"
+    else
+        warn "未检测到防火墙工具 (ufw/firewalld)，请手动放行端口"
     fi
-    warn "云服务器请记得在安全组放行 $FRONTEND_PORT 端口"
+    warn "重要：云服务器(阿里云/腾讯云等)请务必在控制台安全组放行端口: $FRONTEND_PORT, $BACKEND_PORT"
 }
 
 # ---------- 启动 ----------
@@ -425,7 +433,7 @@ do_install() {
     gen_env
     gen_systemd
     gen_nginx
-    firewall_hint
+    configure_firewall
     start_services
     echo
     ok "===== 部署完成！ ====="
