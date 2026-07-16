@@ -47,7 +47,6 @@ err() {
 
 # ---------- 交互式端口输入 ----------
 prompt_ports() {
-    # 检查是否是交互式终端 (直接运行或 bash <(curl...))
     if [[ -t 0 ]]; then
         echo -e "${C_C}==============================================="
         echo "          端口配置"
@@ -59,13 +58,30 @@ prompt_ports() {
         BACKEND_PORT="${input_be:-6365}"
         echo -e "${C_C}===============================================${C_0}"
     else
-        # 管道模式，无法交互，使用环境变量或默认值
         FRONTEND_PORT="${FRONTEND_PORT:-80}"
         BACKEND_PORT="${BACKEND_PORT:-6365}"
         warn "检测到管道模式，无法交互输入端口。使用端口: $FRONTEND_PORT, $BACKEND_PORT"
         warn "如需手动输入端口，请使用此命令运行: bash <(curl -fsSL <url>)"
     fi
     log "使用端口 -> 前端面板: $FRONTEND_PORT | 后端API: $BACKEND_PORT"
+}
+
+# ---------- 自动获取服务器 IP ----------
+get_server_ip() {
+    local ip=""
+    # 优先尝试获取公网 IP
+    ip=$(curl -fsSL --connect-timeout 5 https://api.ipify.org 2>/dev/null || curl -fsSL --connect-timeout 5 https://ifconfig.me 2>/dev/null || true)
+    
+    # 如果公网 IP 获取失败，则获取网卡 IP
+    if [[ -z "$ip" ]]; then
+        ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    fi
+    
+    # 如果还是为空，使用占位符
+    if [[ -z "$ip" ]]; then
+        ip="<服务器IP>"
+    fi
+    echo "$ip"
 }
 
 # ---------- OS / ARCH 检测 ----------
@@ -249,8 +265,6 @@ build_frontend() {
     fi
     log "开始构建前端 ..."
     cd "$INSTALL_DIR/vite-frontend"
-    
-    # 提升 Node.js 内存限制到 2GB，防止 Vite 打包时 OOM
     export NODE_OPTIONS="--max-old-space-size=2048"
     
     log "安装前端依赖..."
@@ -269,7 +283,7 @@ build_frontend() {
 gen_env() {
     local envfile="$INSTALL_DIR/.env"
     if [[ -f "$envfile" ]]; then
-        warn ".env 已存在，保留不动 (如需重新生成请先删除)"
+        warn ".env 已存在，保留不动"
         return
     fi
     log "生成环境配置文件..."
@@ -455,10 +469,14 @@ do_install() {
     gen_nginx
     configure_firewall
     start_services
+    
+    # 自动获取 IP
+    local server_ip=$(get_server_ip)
+    
     echo
     ok "===== 部署完成！ ====="
-    echo "访问面板： http://<服务器IP>:$FRONTEND_PORT"
-    echo "后端 API： http://<服务器IP>:$BACKEND_PORT"
+    echo "访问面板： http://$server_ip:$FRONTEND_PORT"
+    echo "后端 API： http://$server_ip:$BACKEND_PORT"
     echo "日志查看： tail -f /var/log/flvx-panel.log"
     echo "服务管理： systemctl {status|restart|stop} $SERVICE_NAME"
 }
@@ -467,7 +485,6 @@ do_update() {
     log "===== 开始更新流程 ====="
     detect_os
     fetch_source
-    # 强制重新编译
     rm -f "$INSTALL_DIR/go-backend/paneld"
     rm -rf "$INSTALL_DIR/vite-frontend/dist"
     build_backend
