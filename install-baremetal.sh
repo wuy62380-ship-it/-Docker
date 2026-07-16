@@ -85,6 +85,9 @@ pkg_install() {
 
 # ---------- 工具链安装 ----------
 install_go() {
+    # 强制使用新安装的 Go
+    export PATH=/usr/local/go/bin:$PATH
+    
     if command -v go >/dev/null && go version | grep -qE 'go1\.(2[5-9]|[3-9])'; then
         ok "已安装 $(go version)"
         return
@@ -95,8 +98,9 @@ install_go() {
     log "安装 Go ${ver} ..."
     rm -rf /usr/local/go
     curl -fsSL "$url" | tar -C /usr/local -xz
-    grep -q '/usr/local/go/bin' /etc/profile || echo 'export PATH=$PATH:/usr/local/go/bin' >> /etc/profile
-    export PATH=$PATH:/usr/local/go/bin
+    # 写入环境变量，确保优先级最高
+    grep -q '/usr/local/go/bin' /etc/profile || echo 'export PATH=/usr/local/go/bin:$PATH' >> /etc/profile
+    export PATH=/usr/local/go/bin:$PATH
     go version
 }
 
@@ -148,6 +152,10 @@ fetch_source() {
         git -C "$INSTALL_DIR" fetch --all
         git -C "$INSTALL_DIR" reset --hard "origin/$REPO_BRANCH"
     else
+        if [[ -d "$INSTALL_DIR" ]]; then
+            warn "$INSTALL_DIR 已存在但不是有效的 Git 仓库，正在清理..."
+            rm -rf "$INSTALL_DIR"
+        fi
         log "克隆源码到 $INSTALL_DIR ..."
         mkdir -p "$(dirname "$INSTALL_DIR")"
         git clone -b "$REPO_BRANCH" "$REPO_URL" "$INSTALL_DIR"
@@ -406,13 +414,11 @@ do_status() {
 
 # ---------- 自动化入口逻辑 ----------
 if [[ $# -ge 1 ]]; then
-    # 如果传了参数，按参数执行
     case "$1" in
         install|update|uninstall|status) "do_$1" ;;
         *) show_menu; exit 1 ;;
     esac
 else
-    # 未传参数时：如果是交互式终端，显示菜单；如果是管道(curl|bash)，直接自动安装
     if [[ -t 0 ]]; then
         show_menu
         read -rp "请选择 [1-5]：" c
