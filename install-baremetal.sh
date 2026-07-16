@@ -69,15 +69,10 @@ prompt_ports() {
 # ---------- 自动获取服务器 IP ----------
 get_server_ip() {
     local ip=""
-    # 优先尝试获取公网 IP
     ip=$(curl -fsSL --connect-timeout 5 https://api.ipify.org 2>/dev/null || curl -fsSL --connect-timeout 5 https://ifconfig.me 2>/dev/null || true)
-    
-    # 如果公网 IP 获取失败，则获取网卡 IP
     if [[ -z "$ip" ]]; then
         ip=$(hostname -I 2>/dev/null | awk '{print $1}')
     fi
-    
-    # 如果还是为空，使用占位符
     if [[ -z "$ip" ]]; then
         ip="<服务器IP>"
     fi
@@ -151,7 +146,6 @@ pkg_install() {
 # ---------- 工具链安装 ----------
 install_go() {
     export PATH=/usr/local/go/bin:$PATH
-    
     if command -v go >/dev/null && go version | grep -qE 'go1\.(2[5-9]|[3-9])'; then
         ok "已安装 $(go version)"
         return
@@ -266,7 +260,6 @@ build_frontend() {
     log "开始构建前端 ..."
     cd "$INSTALL_DIR/vite-frontend"
     export NODE_OPTIONS="--max-old-space-size=2048"
-    
     log "安装前端依赖..."
     pnpm install --frozen-lockfile 2>/dev/null || pnpm install
     log "执行前端打包 (这可能需要几分钟，请耐心等待)..."
@@ -283,7 +276,7 @@ build_frontend() {
 gen_env() {
     local envfile="$INSTALL_DIR/.env"
     if [[ -f "$envfile" ]]; then
-        warn ".env 已存在，保留不动"
+        warn ".env 已存在，保留不动 (如需重新生成请先删除)"
         return
     fi
     log "生成环境配置文件..."
@@ -336,7 +329,6 @@ gen_nginx() {
     local root="$INSTALL_DIR/vite-frontend/dist"
     local conf="/etc/nginx/conf.d/${NGINX_CONF_NAME}"
     [[ -d /etc/nginx/sites-enabled && ! -d /etc/nginx/conf.d ]] && conf="/etc/nginx/sites-enabled/${NGINX_CONF_NAME}"
-    
     cat > "$conf" <<EOF
 server {
     listen $FRONTEND_PORT;
@@ -417,14 +409,14 @@ configure_firewall() {
     else
         warn "未检测到防火墙工具 (ufw/firewalld)，请手动放行端口"
     fi
-    warn "重要：云服务器(阿里云/腾讯云等)请务必在控制台安全组放行端口: $FRONTEND_PORT, $BACKEND_PORT"
+    warn "重要：云服务器请务必在控制台安全组放行端口: $FRONTEND_PORT, $BACKEND_PORT"
 }
 
 # ---------- 启动 ----------
 start_services() {
     log "启动后端服务..."
     systemctl restart "$SERVICE_NAME"
-    sleep 2
+    sleep 3 # 等待服务初始化写入日志
     if systemctl is-active --quiet "$SERVICE_NAME"; then
         ok "后端已启动（端口 $BACKEND_PORT）"
     else
@@ -470,8 +462,10 @@ do_install() {
     configure_firewall
     start_services
     
-    # 自动获取 IP
     local server_ip=$(get_server_ip)
+    
+    # 尝试从日志中提取初始账号密码
+    local init_info=$(grep -iE "admin|password|account|密码" /var/log/flvx-panel.log 2>/dev/null | tail -n 5)
     
     echo
     ok "===== 部署完成！ ====="
@@ -479,6 +473,17 @@ do_install() {
     echo "后端 API： http://$server_ip:$BACKEND_PORT"
     echo "日志查看： tail -f /var/log/flvx-panel.log"
     echo "服务管理： systemctl {status|restart|stop} $SERVICE_NAME"
+    echo -e "${C_C}-----------------------------------------------${C_0}"
+    if [[ -n "$init_info" ]]; then
+        echo -e "${C_G}初始账号信息 (自动从日志提取):${C_0}"
+        echo "$init_info"
+    else
+        echo -e "${C_Y}初始账号信息:${C_0}"
+        echo "  账号: admin"
+        echo "  密码: admin (或 admin123)"
+        echo "  (若无法登录，请执行 grep -i password /var/log/flvx-panel.log 查看)"
+    fi
+    echo -e "${C_C}-----------------------------------------------${C_0}"
 }
 
 do_update() {
