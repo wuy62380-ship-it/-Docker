@@ -1,16 +1,14 @@
-cat > /root/flvx_native_install.sh << 'EOF'
 #!/bin/bash
 # -------------------------------------------------------------
 # FLVX 面板免 Docker 一键原生安装脚本 (专为高并发直播中转优化)
 # -------------------------------------------------------------
 
-# 确保以 root 权限运行
 if [ "$EUID" -ne 0 ]; then
   echo "❌ 错误：请使用 root 用户或使用 sudo 运行此脚本！"
   exit 1
 fi
 
-echo "🚀 开始进行 FLVX 面板原生安装..."
+echo "🚀 开始进行 FLVX 面板纯原生免 Docker 安装..."
 
 # 1. 安装基础依赖与 Nginx
 echo "📦 正在更新系统组件并安装 Nginx..."
@@ -30,7 +28,7 @@ fi
 echo "⚙️ 正在下载并配置 Rust-Realm 转发核心..."
 wget -q --show-progress https://github.com
 if [ $? -ne 0 ]; then
-    echo "❌ Realm 下载失败，请检查服务器海外网络！"
+    echo "❌ Realm 下载失败，请检查服务器网络！"
     exit 1
 fi
 tar -zxvf realm-x86_64-unknown-linux-gnu.tar.gz > /dev/null
@@ -131,5 +129,3 @@ echo "👤 默认管理员账号：admin_user"
 echo "🔑 默认管理员密码：admin_user"
 echo "⚠️ 警告：为了直播流安全，登录后请立即前往后台修改默认密码！"
 echo "=================================================================="
-EOF
-chmod +x /root/flvx_native_install.sh && /root/flvx_native_install.sh
