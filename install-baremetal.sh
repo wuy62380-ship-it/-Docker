@@ -9,7 +9,7 @@
 # =============================================================
 set -euo pipefail
 
-# ---------- 禁用交互式对话框，防止 apt 等工具卡住 ----------
+# ---------- 禁用交互式对话框 ----------
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- 可配置项 ----------
@@ -54,7 +54,7 @@ detect_os() {
         OS_ID=$ID
         OS_VER=$VERSION_ID
     else
-        err "无法识别操作系统（缺 /etc/os-release）"
+        err "无法识别操作系统"
         exit 1
     fi
     case "$(uname -m)" in
@@ -67,9 +67,11 @@ detect_os() {
 
 # ---------- 包管理器封装 ----------
 pkg_install() {
+    log "正在通过包管理器安装: $* ..."
     case "$OS_ID" in
         ubuntu|debian)
-            apt-get update -y >/dev/null
+            apt-get update -y
+            # 保留输出，让用户看到进度
             apt-get install -y "$@"
             ;;
         centos|rhel|rocky|almalinux|fedora)
@@ -81,11 +83,11 @@ pkg_install() {
             ;;
         *) err "不支持的发行版：$OS_ID"; exit 1 ;;
     esac
+    ok "依赖安装完成: $*"
 }
 
 # ---------- 工具链安装 ----------
 install_go() {
-    # 强制使用新安装的 Go
     export PATH=/usr/local/go/bin:$PATH
     
     if command -v go >/dev/null && go version | grep -qE 'go1\.(2[5-9]|[3-9])'; then
@@ -95,52 +97,61 @@ install_go() {
     local ver="1.25.0"
     local url="https://go.dev/dl/go${ver}.linux-${ARCH}.tar.gz"
     [[ -n "$GH_PROXY" ]] && url="${GH_PROXY}/${url}"
-    log "安装 Go ${ver} ..."
+    log "正在下载 Go ${ver} ..."
     rm -rf /usr/local/go
-    curl -fsSL "$url" | tar -C /usr/local -xz
-    # 写入环境变量，确保优先级最高
+    # 下载到临时文件并显示进度条
+    curl -fL --progress-bar "$url" -o /tmp/go.tar.gz
+    log "正在解压 Go ..."
+    tar -C /usr/local -xzf /tmp/go.tar.gz
+    rm -f /tmp/go.tar.gz
     grep -q '/usr/local/go/bin' /etc/profile || echo 'export PATH=/usr/local/go/bin:$PATH' >> /etc/profile
     export PATH=/usr/local/go/bin:$PATH
-    go version
+    ok "Go 安装完成: $(go version)"
 }
 
 install_node() {
     if command -v node >/dev/null && [[ "$(node -v | cut -dv -f2 | cut -d. -f1)" -ge 20 ]]; then
-        ok "已安装 $(node -v)"
+        ok "已安装 Node.js $(node -v)"
         return
     fi
-    log "安装 Node.js 20.x ..."
+    log "正在配置 Node.js 20.x 源 ..."
     case "$OS_ID" in
         ubuntu|debian)
             curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+            log "正在安装 Node.js ..."
             apt-get install -y nodejs
             ;;
         *)
             curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+            log "正在安装 Node.js ..."
             dnf install -y nodejs
             ;;
     esac
-    node -v
+    ok "Node.js 安装完成: $(node -v)"
 }
 
 install_pnpm() {
     if ! command -v pnpm >/dev/null; then
+        log "正在安装 pnpm ..."
         npm install -g pnpm --registry="$NPM_REGISTRY"
     fi
     npm config set registry "$NPM_REGISTRY"
     pnpm config set registry "$NPM_REGISTRY"
-    ok "pnpm $(pnpm -v)"
+    ok "pnpm 安装完成: $(pnpm -v)"
 }
 
 install_nginx() {
     if ! command -v nginx >/dev/null; then
-        log "安装 nginx ..."
+        log "检测到未安装 Nginx，准备安装..."
         pkg_install nginx
+    else
+        ok "Nginx 已安装"
     fi
     systemctl enable --now nginx >/dev/null 2>&1 || true
 }
 
 install_build_deps() {
+    log "检查并安装基础编译依赖..."
     pkg_install curl ca-certificates git wget tar gzip build-essential gcc make
     command -v gcc >/dev/null || pkg_install gcc gcc-c++ make
 }
@@ -153,25 +164,28 @@ fetch_source() {
         git -C "$INSTALL_DIR" reset --hard "origin/$REPO_BRANCH"
     else
         if [[ -d "$INSTALL_DIR" ]]; then
-            warn "$INSTALL_DIR 已存在但不是有效的 Git 仓库，正在清理..."
+            warn "$INSTALL_DIR 已存在但不是 Git 仓库，正在清理..."
             rm -rf "$INSTALL_DIR"
         fi
-        log "克隆源码到 $INSTALL_DIR ..."
+        log "正在克隆源码到 $INSTALL_DIR ..."
         mkdir -p "$(dirname "$INSTALL_DIR")"
         git clone -b "$REPO_BRANCH" "$REPO_URL" "$INSTALL_DIR"
     fi
+    ok "源码同步完成"
 }
 
 # ---------- 编译后端 ----------
 build_backend() {
-    log "编译后端 paneld ..."
+    log "开始编译后端 paneld ..."
     cd "$INSTALL_DIR/go-backend"
     export GOPROXY="$GOMOD_PROXY"
     export CGO_ENABLED=1
+    log "下载 Go 依赖包..."
     go mod download
+    log "执行编译..."
     go build -trimpath -ldflags="-s -w" -o paneld ./cmd/paneld
     if [[ -f paneld ]]; then
-        ok "后端二进制大小：$(ls -lh paneld | awk '{print $5}')"
+        ok "后端编译成功，大小：$(ls -lh paneld | awk '{print $5}')"
     else
         err "后端编译失败"
         exit 1
@@ -180,12 +194,14 @@ build_backend() {
 
 # ---------- 构建前端 ----------
 build_frontend() {
-    log "构建前端 ..."
+    log "开始构建前端 ..."
     cd "$INSTALL_DIR/vite-frontend"
+    log "安装前端依赖..."
     pnpm install --frozen-lockfile 2>/dev/null || pnpm install
+    log "执行前端打包..."
     pnpm build
     if [[ -d dist ]]; then
-        ok "前端产物大小：$(du -sh dist | awk '{print $1}')"
+        ok "前端构建成功，大小：$(du -sh dist | awk '{print $1}')"
     else
         err "前端构建失败"
         exit 1
@@ -196,13 +212,13 @@ build_frontend() {
 gen_env() {
     local envfile="$INSTALL_DIR/.env"
     if [[ -f "$envfile" ]]; then
-        warn ".env 已存在，保留不动（如需重置请先删除）"
+        warn ".env 已存在，保留不动"
         return
     fi
+    log "生成环境配置文件..."
     local jwt
     jwt=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)
     cat > "$envfile" <<EOF
-# flvx 裸机部署环境变量
 DB_TYPE=sqlite
 DB_PATH=$INSTALL_DIR/data/gost.db
 JWT_SECRET=$jwt
@@ -211,11 +227,12 @@ TZ=Asia/Shanghai
 FLUX_VERSION=baremetal
 EOF
     chmod 600 "$envfile"
-    ok ".env 已生成（JWT_SECRET 已随机化）"
+    ok ".env 生成完毕"
 }
 
 # ---------- systemd ----------
 gen_systemd() {
+    log "配置 systemd 服务..."
     cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
 [Unit]
 Description=flvx panel (baremetal, no docker)
@@ -239,11 +256,12 @@ EOF
     : > /var/log/flvx-panel.log
     systemctl daemon-reload
     systemctl enable "$SERVICE_NAME" >/dev/null
-    ok "systemd 服务已创建：$SERVICE_NAME"
+    ok "systemd 服务创建成功"
 }
 
 # ---------- nginx 反代 ----------
 gen_nginx() {
+    log "配置 Nginx 反向代理..."
     local root="$INSTALL_DIR/vite-frontend/dist"
     local conf="/etc/nginx/conf.d/${NGINX_CONF_NAME}"
     [[ -d /etc/nginx/sites-enabled && ! -d /etc/nginx/conf.d ]] && conf="/etc/nginx/sites-enabled/${NGINX_CONF_NAME}"
@@ -276,10 +294,8 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_http_version 1.1;
-        proxy_buffering off;
-        proxy_cache off;
-        proxy_read_timeout 120s;
-        proxy_send_timeout 120s;
+        proxy_buffering off; proxy_cache off;
+        proxy_read_timeout 120s; proxy_send_timeout 120s;
         proxy_pass http://127.0.0.1:$BACKEND_PORT/api/v1/tunnel/diagnose/stream;
     }
     location = /api/v1/forward/diagnose/stream {
@@ -287,40 +303,32 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_http_version 1.1;
-        proxy_buffering off;
-        proxy_cache off;
-        proxy_read_timeout 120s;
-        proxy_send_timeout 120s;
+        proxy_buffering off; proxy_cache off;
+        proxy_read_timeout 120s; proxy_send_timeout 120s;
         proxy_pass http://127.0.0.1:$BACKEND_PORT/api/v1/forward/diagnose/stream;
     }
     location ^~ /api/v1/ {
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_read_timeout 120s;
-        proxy_send_timeout 120s;
+        proxy_read_timeout 120s; proxy_send_timeout 120s;
         proxy_pass http://127.0.0.1:$BACKEND_PORT/api/v1/;
     }
-    location /flow/upload {
-        proxy_pass http://127.0.0.1:$BACKEND_PORT/flow/upload;
-    }
-    location /flow/config {
-        proxy_pass http://127.0.0.1:$BACKEND_PORT/flow/config;
-    }
+    location /flow/upload { proxy_pass http://127.0.0.1:$BACKEND_PORT/flow/upload; }
+    location /flow/config { proxy_pass http://127.0.0.1:$BACKEND_PORT/flow/config; }
     location /system-info {
         proxy_pass http://127.0.0.1:$BACKEND_PORT/system-info;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
+        proxy_read_timeout 3600s; proxy_send_timeout 3600s;
         proxy_set_header Host \$host;
     }
 }
 EOF
-    nginx -t || { err "nginx 配置语法错误"; exit 1; }
+    nginx -t || { err "Nginx 配置语法错误"; exit 1; }
     systemctl reload nginx
-    ok "nginx 配置已生成并 reload：$conf"
+    ok "Nginx 配置生效"
 }
 
 # ---------- 防火墙提示 ----------
@@ -331,11 +339,12 @@ firewall_hint() {
         firewall-cmd --permanent --add-port="$FRONTEND_PORT/tcp" >/dev/null 2>&1
         firewall-cmd --reload >/dev/null 2>&1 && warn "firewalld 已放行 $FRONTEND_PORT"
     fi
-    warn "云服务器请同时在安全组放行 $FRONTEND_PORT 与节点通信端口"
+    warn "云服务器请记得在安全组放行 $FRONTEND_PORT 端口"
 }
 
 # ---------- 启动 ----------
 start_services() {
+    log "启动后端服务..."
     systemctl restart "$SERVICE_NAME"
     sleep 2
     if systemctl is-active --quiet "$SERVICE_NAME"; then
@@ -344,10 +353,11 @@ start_services() {
         err "后端启动失败，查看日志：journalctl -u $SERVICE_NAME -n 50"
         exit 1
     fi
+    log "进行健康检查..."
     if curl -fsS "http://127.0.0.1:$BACKEND_PORT/flow/test" >/dev/null 2>&1; then
-        ok "后端健康检查通过"
+        ok "健康检查通过"
     else
-        warn "健康检查 /flow/test 未通过，可能还在初始化，稍等再试"
+        warn "健康检查未通过，可能还在初始化"
     fi
 }
 
@@ -364,6 +374,7 @@ EOF
 }
 
 do_install() {
+    log "===== 开始安装流程 ====="
     detect_os
     install_build_deps
     install_go
@@ -379,13 +390,15 @@ do_install() {
     firewall_hint
     start_services
     echo
-    ok "部署完成！访问：http://<服务器IP>:$FRONTEND_PORT"
-    echo "   后端 API： http://<服务器IP>:$BACKEND_PORT"
-    echo "   日志：     tail -f /var/log/flvx-panel.log"
-    echo "   管理：     systemctl {status|restart|stop} $SERVICE_NAME"
+    ok "===== 部署完成！ ====="
+    echo "访问面板： http://<服务器IP>:$FRONTEND_PORT"
+    echo "后端 API： http://<服务器IP>:$BACKEND_PORT"
+    echo "日志查看： tail -f /var/log/flvx-panel.log"
+    echo "服务管理： systemctl {status|restart|stop} $SERVICE_NAME"
 }
 
 do_update() {
+    log "===== 开始更新流程 ====="
     detect_os
     fetch_source
     build_backend
@@ -395,14 +408,15 @@ do_update() {
 }
 
 do_uninstall() {
+    log "===== 开始卸载 ====="
     systemctl stop "$SERVICE_NAME" 2>/dev/null || true
     systemctl disable "$SERVICE_NAME" 2>/dev/null || true
     rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
     rm -f "/etc/nginx/conf.d/${NGINX_CONF_NAME}" /etc/nginx/sites-enabled/${NGINX_CONF_NAME}
     systemctl daemon-reload
     systemctl reload nginx 2>/dev/null || true
-    warn "已停止服务并移除 systemd / nginx 配置"
-    read -rp "是否同时删除源码与数据目录 $INSTALL_DIR ？[y/N] " del
+    warn "已停止服务并移除配置"
+    read -rp "是否删除源码与数据目录 $INSTALL_DIR ？[y/N] " del
     [[ "$del" =~ ^[Yy]$ ]] && rm -rf "$INSTALL_DIR" && ok "已删除 $INSTALL_DIR"
 }
 
