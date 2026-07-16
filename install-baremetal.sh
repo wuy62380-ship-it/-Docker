@@ -65,13 +65,39 @@ detect_os() {
     log "系统：$OS_ID $OS_VER  架构：$ARCH"
 }
 
+# ---------- 检查内存并创建 Swap ----------
+check_memory_and_swap() {
+    local mem_mb=$(free -m | awk '/^Mem:/{print $2}')
+    local swap_mb=$(free -m | awk '/^Swap:/{print $2}')
+    
+    log "当前物理内存: ${mem_mb}MB, 已有 Swap: ${swap_mb}MB"
+    
+    if [[ $mem_mb -lt 2000 && $swap_mb -lt 1000 ]]; then
+        warn "检测到内存不足 2G 且 Swap 不足 1G，为防止编译时 OOM，自动创建 2G Swap..."
+        if [[ -f /swapfile ]]; then
+            warn "/swapfile 已存在，跳过创建"
+        else
+            dd if=/dev/zero of=/swapfile bs=1M count=2048 status=progress
+            chmod 600 /swapfile
+            mkswap /swapfile
+            swapon /swapfile
+            # 写入 fstab 永久生效
+            if ! grep -q '/swapfile' /etc/fstab; then
+                echo '/swapfile none swap sw 0 0' >> /etc/fstab
+            fi
+            ok "Swap 创建并挂载成功 (2GB)"
+        fi
+    else
+        ok "内存充足，跳过创建 Swap"
+    fi
+}
+
 # ---------- 包管理器封装 ----------
 pkg_install() {
     log "正在通过包管理器安装: $* ..."
     case "$OS_ID" in
         ubuntu|debian)
             apt-get update -y
-            # 保留输出，让用户看到进度
             apt-get install -y "$@"
             ;;
         centos|rhel|rocky|almalinux|fedora)
@@ -99,7 +125,6 @@ install_go() {
     [[ -n "$GH_PROXY" ]] && url="${GH_PROXY}/${url}"
     log "正在下载 Go ${ver} ..."
     rm -rf /usr/local/go
-    # 下载到临时文件并显示进度条
     curl -fL --progress-bar "$url" -o /tmp/go.tar.gz
     log "正在解压 Go ..."
     tar -C /usr/local -xzf /tmp/go.tar.gz
@@ -182,8 +207,9 @@ build_backend() {
     export CGO_ENABLED=1
     log "下载 Go 依赖包..."
     go mod download
-    log "执行编译..."
-    go build -trimpath -ldflags="-s -w" -o paneld ./cmd/paneld
+    log "执行编译 (这可能需要几分钟，请耐心等待)..."
+    # 限制并行编译数量，降低内存峰值
+    go build -p 2 -trimpath -ldflags="-s -w" -o paneld ./cmd/paneld
     if [[ -f paneld ]]; then
         ok "后端编译成功，大小：$(ls -lh paneld | awk '{print $5}')"
     else
@@ -376,6 +402,7 @@ EOF
 do_install() {
     log "===== 开始安装流程 ====="
     detect_os
+    check_memory_and_swap
     install_build_deps
     install_go
     install_node
