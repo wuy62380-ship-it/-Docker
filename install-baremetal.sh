@@ -9,6 +9,9 @@
 # =============================================================
 set -euo pipefail
 
+# ---------- 禁用交互式对话框，防止 apt 等工具卡住 ----------
+export DEBIAN_FRONTEND=noninteractive
+
 # ---------- 可配置项 ----------
 INSTALL_DIR="/opt/flvx"
 REPO_URL="https://github.com/Sagit-chu/flvx.git"
