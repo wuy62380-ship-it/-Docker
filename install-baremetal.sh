@@ -479,9 +479,8 @@ do_install() {
         echo "$init_info"
     else
         echo -e "${C_Y}初始账号信息:${C_0}"
-        echo "  账号: admin"
-        echo "  密码: admin (或 admin123)"
-        echo "  (若无法登录，请执行 grep -i password /var/log/flvx-panel.log 查看)"
+        echo "  账号: admin_user"
+        echo "  密码: admin_user (若不对，请执行 grep -i password /var/log/flvx-panel.log 查看)"
     fi
     echo -e "${C_C}-----------------------------------------------${C_0}"
 }
