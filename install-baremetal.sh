@@ -4,21 +4,18 @@
 # 适用：Ubuntu 20.04+ / Debian 11+ / CentOS 8+ / Fedora 38+
 # 架构：amd64 / arm64
 # 用法： 
-#   自动安装(默认端口)： curl -fsSL <url> | sudo bash
-#   自动安装(指定端口)： curl -fsSL <url> | sudo FRONTEND_PORT=8080 BACKEND_PORT=6365 bash
-#   交互菜单： sudo ./install-baremetal.sh
+#   交互式输入端口(推荐): bash <(curl -fsSL <url>)
+#   静默指定端口: curl -fsSL <url> | sudo FRONTEND_PORT=8080 BACKEND_PORT=6365 bash
 # =============================================================
 set -euo pipefail
 
 # ---------- 禁用交互式对话框 ----------
 export DEBIAN_FRONTEND=noninteractive
 
-# ---------- 可配置项 (支持环境变量传入) ----------
+# ---------- 可配置项 ----------
 INSTALL_DIR="/opt/flvx"
 REPO_URL="https://github.com/Sagit-chu/flvx.git"
 REPO_BRANCH="main"
-BACKEND_PORT="${BACKEND_PORT:-6365}"     # 后端 API 端口
-FRONTEND_PORT="${FRONTEND_PORT:-80}"     # 前端面板端口
 GOMOD_PROXY="https://goproxy.cn,direct"
 NPM_REGISTRY="https://registry.npmmirror.com"
 GH_PROXY=""
@@ -48,6 +45,29 @@ err() {
 # ---------- root 检查 ----------
 [[ $EUID -ne 0 ]] && { err "请用 root 或 sudo 执行"; exit 1; }
 
+# ---------- 交互式端口输入 ----------
+prompt_ports() {
+    # 检查是否是交互式终端 (直接运行或 bash <(curl...))
+    if [[ -t 0 ]]; then
+        echo -e "${C_C}==============================================="
+        echo "          端口配置"
+        echo -e "===============================================${C_0}"
+        read -rp "请输入前端面板端口 (默认 80): " input_fe
+        FRONTEND_PORT="${input_fe:-80}"
+        
+        read -rp "请输入后端 API 端口 (默认 6365): " input_be
+        BACKEND_PORT="${input_be:-6365}"
+        echo -e "${C_C}===============================================${C_0}"
+    else
+        # 管道模式，无法交互，使用环境变量或默认值
+        FRONTEND_PORT="${FRONTEND_PORT:-80}"
+        BACKEND_PORT="${BACKEND_PORT:-6365}"
+        warn "检测到管道模式，无法交互输入端口。使用端口: $FRONTEND_PORT, $BACKEND_PORT"
+        warn "如需手动输入端口，请使用此命令运行: bash <(curl -fsSL <url>)"
+    fi
+    log "使用端口 -> 前端面板: $FRONTEND_PORT | 后端API: $BACKEND_PORT"
+}
+
 # ---------- OS / ARCH 检测 ----------
 detect_os() {
     if [[ -f /etc/os-release ]]; then
@@ -64,7 +84,6 @@ detect_os() {
         *) err "不支持的架构：$(uname -m)"; exit 1 ;;
     esac
     log "系统：$OS_ID $OS_VER  架构：$ARCH"
-    log "使用端口 -> 前端面板: $FRONTEND_PORT | 后端API: $BACKEND_PORT"
 }
 
 # ---------- 检查内存并创建 Swap ----------
@@ -420,6 +439,7 @@ EOF
 
 do_install() {
     log "===== 开始安装流程 ====="
+    prompt_ports
     detect_os
     check_memory_and_swap
     install_build_deps
